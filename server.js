@@ -87,18 +87,24 @@ class Game {
     this.winner = -1; this.lastScorer = -1; this.timer = 0;
     this.ev = [];
     this.botT = 0; this.botErr = { x: 0, y: 0 }; this.botServeX = 0;
+    this.lat = [0, 0];        // ping aller-retour de chaque joueur (s)
+    this.pending = null;      // frappe "en attente" : la balle a passé le joueur, son geste peut encore arriver
+    this.deferred = null;     // point mis en attente pendant ce temps
     this.last = Date.now();
     this.loop = setInterval(() => this.tick(), 1000 / 60);
   }
   stop() { clearInterval(this.loop); }
 
   begin() { this.score = [0, 0]; this.server = 0; this.toServe(); }
-  toServe() { this.phase = 'serve'; this.stage = ''; this.botT = 1.3; this.botServeX = rnd(-0.4, 0.4); }
+  toServe() { this.phase = 'serve'; this.stage = ''; this.pending = null; this.deferred = null; this.botT = 1.3; this.botServeX = rnd(-0.4, 0.4); }
 
-  setPad(p, lx, ly) {
-    const s = sgn(p);
-    this.pad[p].x = clamp(lx, -1, 1) * s;
-    this.pad[p].y = clamp(ly, TH - 0.25, TH + 0.9);
+  setPad(p, lx, ly, vx, vy) {
+    const s = sgn(p), pad = this.pad[p];
+    pad.x = clamp(lx, -1, 1) * s;
+    pad.y = clamp(ly, TH - 0.25, TH + 0.9);
+    // vitesse du geste mesurée côté joueur : sur Internet les messages arrivent par paquets,
+    // la recalculer ici donnerait de faux pics (et donc de l'effet / du feu au hasard)
+    if (Number.isFinite(vx) && Number.isFinite(vy)) { pad.cvx = clamp(vx, -6, 6) * s; pad.cvy = clamp(vy, -6, 6); pad.cv = true; }
   }
 
   serve(p) {
@@ -112,6 +118,7 @@ class Game {
 
   point(winner) {
     if (this.phase !== 'rally') return;
+    if (this.pending) { this.deferred = winner; return; }
     this.score[winner]++;
     this.lastScorer = winner;
     this.timer = 1.8;
@@ -150,6 +157,7 @@ class Game {
       vx += ex / t; vz += ez / t;
     }
     Object.assign(b, { vx, vy, vz, ss, ts });
+    this.pending = null; this.deferred = null;
     this.lastHitter = p; this.stage = 'needOpp';
     this.ev.push('hit');
     if (this.bot && p === 0) {
@@ -215,6 +223,9 @@ class Game {
         if (Math.hypot(cx - pad.x, cy - pad.y) < HIT_R) {
           b.x = cx; b.y = cy; b.z = zp;
           this.hit(r);
+        } else {
+          // le joueur voit la raquette avec du retard : on lui laisse le temps (son ping + l'affichage) de la toucher
+          this.pending = { r, cx, cy, zp, age: 0, max: clamp(this.lat[r] + 0.12, 0.08, 0.45) };
         }
       }
     }
@@ -238,12 +249,24 @@ class Game {
     if (dt <= 0) return;
     if (this.bot) this.botThink(dt);
     for (const p of this.pad) {
-      p.vx += ((p.x - p.px) / dt - p.vx) * 0.4;
-      p.vy += ((p.y - p.py) / dt - p.vy) * 0.4;
+      if (p.cv) { p.vx = p.cvx; p.vy = p.cvy; }
+      else { p.vx += ((p.x - p.px) / dt - p.vx) * 0.4; p.vy += ((p.y - p.py) / dt - p.vy) * 0.4; }
       p.px = p.x; p.py = p.y;
     }
     const n = Math.ceil(dt / (1 / 120));
     for (let i = 0; i < n; i++) this.step(dt / n);
+    const pd = this.pending;
+    if (pd) {
+      pd.age += dt;
+      const pad = this.pad[pd.r];
+      if (this.phase === 'rally' && Math.hypot(pd.cx - pad.x, pd.cy - pad.y) < HIT_R) {
+        Object.assign(this.ball, { x: pd.cx, y: pd.cy, z: pd.zp });
+        this.hit(pd.r);
+      } else if (pd.age > pd.max) {
+        this.pending = null;
+        if (this.deferred !== null) { const w = this.deferred; this.deferred = null; this.point(w); }
+      }
+    }
     if (this.phase === 'point' && (this.timer -= dt) <= 0) {
       this.server = Math.floor((this.score[0] + this.score[1]) / 2) % 2;
       this.toServe();
@@ -251,7 +274,7 @@ class Game {
     const r3 = (v) => Math.round(v * 1000) / 1000, r2 = (v) => Math.round(v * 100) / 100;
     const b = this.ball;
     this.onState({
-      t: 's', b: [r3(b.x), r3(b.y), r3(b.z)], sp: [r2(b.ss), r2(b.ts)],
+      t: 's', ts: now, b: [r3(b.x), r3(b.y), r3(b.z)], sp: [r2(b.ss), r2(b.ts)],
       p: this.pad.map((p) => [r3(p.x), r3(p.y)]),
       sc: this.score, ph: this.phase, sv: this.server, lh: this.lastHitter,
       w: this.phase === 'over' ? this.winner : this.lastScorer,
@@ -282,6 +305,8 @@ function leave(ws) {
 const wss = new WebSocketServer({ server });
 wss.on('connection', (ws) => {
   ws.room = null;
+  const pinger = setInterval(() => send(ws, { t: 'ping', ts: Date.now() }), 1000);
+  ws.on('close', () => clearInterval(pinger));
   ws.on('message', (raw) => {
     let m; try { m = JSON.parse(raw); } catch { return; }
     if (m.t === 'create') {
@@ -309,7 +334,11 @@ wss.on('connection', (ws) => {
     } else if (m.t === 'leave') {
       leave(ws);
     } else if (m.t === 'pad' && ws.room?.game) {
-      if (Number.isFinite(m.x) && Number.isFinite(m.y)) ws.room.game.setPad(ws.idx, m.x, m.y);
+      if (Number.isFinite(m.x) && Number.isFinite(m.y)) ws.room.game.setPad(ws.idx, m.x, m.y, m.vx, m.vy);
+    } else if (m.t === 'pong' && Number.isFinite(m.ts)) {
+      const rtt = clamp((Date.now() - m.ts) / 1000, 0, 1);
+      ws.rtt = ws.rtt === undefined ? rtt : ws.rtt * 0.7 + rtt * 0.3;
+      if (ws.room?.game) ws.room.game.lat[ws.idx] = ws.rtt;
     } else if (m.t === 'serve' && ws.room?.game) {
       ws.room.game.serve(ws.idx);
     }

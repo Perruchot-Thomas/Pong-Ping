@@ -838,14 +838,18 @@ function connect(onOpen) {
     } else if (m.t === 'err') { toast(m.msg); }
     else if (m.t === 'start') {
       you = m.you; s = you === 0 ? 1 : -1; playing = true; state = null; vsBot = m.bot || null;
+      snaps.length = 0; clockOff = null;
       $('lobby').classList.add('hide'); $('err').textContent = '';
       $('score').classList.remove('hide'); $('hint').classList.remove('hide');
       window.oppName = vsBot ? 'BOT' : 'ADV'; $('oppLabel').textContent = window.oppName; sbLast = '';
     } else if (m.t === 'left') {
       showMenu("L'adversaire a quitté la partie.");
+    } else if (m.t === 'ping') {
+      send({ t: 'pong', ts: m.ts });
     } else if (m.t === 's') {
       if (!playing) return;
       state = m;
+      pushSnap(m);
       m.ev.forEach((k) => {
         SND[k]?.();
         if (k === 'point') { excite = 1.2; cheer(); burstConfetti(); for (let i = 0; i < 8; i++) setTimeout(flash, i * 60); }
@@ -907,7 +911,37 @@ addEventListener('pointerdown', (e) => {
   if (!playing) return;
   ac(); mouse.x = e.clientX; mouse.y = e.clientY; movePad(); send({ t: 'serve' });
 });
-setInterval(() => playing && send({ t: 'pad', x: my.x, y: my.y }), 1000 / 60);
+// on envoie aussi la vitesse du geste, mesurée ici à chaque image (fiable même si le réseau saccade)
+setInterval(() => playing && send({ t: 'pad', x: my.x, y: my.y, vx: myVel.x, vy: myVel.y }), 1000 / 60);
+
+// ---------- affichage lissé : on montre le jeu avec ~70 ms de retard, en interpolant entre deux états ----------
+// (les états arrivent irrégulièrement par Internet ; sans ça, la raquette saccade)
+const INTERP = 70;
+const snaps = [];
+let clockOff = null; // écart estimé entre l'horloge locale et celle du serveur
+function pushSnap(m) {
+  const off = Date.now() - m.ts;
+  clockOff = clockOff === null || off < clockOff ? off : clockOff + (off - clockOff) * .01;
+  snaps.push({ ts: m.ts, b: m.b, o: m.p[1 - you] });
+  if (snaps.length > 40) snaps.shift();
+}
+const lerp = (a, b, k) => a + (b - a) * k;
+function sampleSnap(out) {
+  if (!snaps.length) return false;
+  const rt = Date.now() - clockOff - INTERP;
+  let i = snaps.length - 1;
+  while (i > 0 && snaps[i - 1].ts > rt) i--;
+  const A = snaps[Math.max(0, i - 1)], B = snaps[i];
+  if (A === B || rt >= B.ts) { out.b = B.b; out.o = B.o; return true; }
+  const k = Math.max(0, Math.min(1, (rt - A.ts) / ((B.ts - A.ts) || 1)));
+  // grand saut (remise en jeu) : pas d'interpolation
+  const jump = Math.hypot(B.b[0] - A.b[0], B.b[1] - A.b[1], B.b[2] - A.b[2]) > .8;
+  out.b = jump ? B.b : [lerp(A.b[0], B.b[0], k), lerp(A.b[1], B.b[1], k), lerp(A.b[2], B.b[2], k)];
+  out.o = [lerp(A.o[0], B.o[0], k), lerp(A.o[1], B.o[1], k)];
+  return true;
+}
+const smooth = { b: [0, 0, 0], o: [0, 0] };
+const myVel = { x: 0, y: 0 }, myPrev = { x: 0, y: 0 };
 
 // ================== BOUCLE ==================
 let lastT = performance.now() / 1000, shake = 0;
@@ -921,6 +955,11 @@ function frame() {
   camera.quaternion.copy(camQuat);
   updateMenu(t, dt);
   movePad();
+  if (dt > 0) {
+    myVel.x += ((my.x - myPrev.x) / dt - myVel.x) * .5;
+    myVel.y += ((my.y - myPrev.y) / dt - myVel.y) * .5;
+    myPrev.x = my.x; myPrev.y = my.y;
+  }
   myPad.position.set(my.x, my.y, PZ);
   myPad.rotation.x -= dt * 1.2;
   // écrasement des balles des joueurs au contact (petit "boing")
@@ -966,7 +1005,8 @@ function frame() {
 
   if (state) {
     drawBoard(state.sc[you], state.sc[1 - you]);
-    const [bx, by, bz] = state.b;
+    if (!sampleSnap(smooth)) { smooth.b = state.b; smooth.o = state.p[1 - you]; }
+    const [bx, by, bz] = smooth.b;
     gamePos.set(bx * s, by, bz * s);
     // rotation selon l'effet : latéral -> toupie autour de l'axe vertical, lifté/coupé -> roule vers l'avant/arrière
     const [ss, ts] = state.sp, fire = Math.min(1, Math.hypot(ss, ts));
@@ -1005,9 +1045,9 @@ function frame() {
     } else fx.classList.remove('on');
     if (state.ev.includes('hit')) shake = .02;
 
-    const o = state.p[1 - you];
-    oppPad.position.x += (o[0] * s - oppPad.position.x) * .5;
-    oppPad.position.y += (o[1] - oppPad.position.y) * .5;
+    const o = smooth.o;
+    oppPad.position.x = o[0] * s;
+    oppPad.position.y = o[1];
     oppPad.rotation.x += dt * 1.2;
 
     $('s0').textContent = state.sc[you]; $('s1').textContent = state.sc[1 - you];
