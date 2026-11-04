@@ -5,10 +5,10 @@ After=network.target
 [Service]
 Type=simple
 User=etudiant
-WorkingDirectory=/var/www/pongping/pong-ping
+WorkingDirectory=/var/www/pongping/Pong-Ping
 Environment="PORT=3001"
 Environment="NODE_ENV=production"
-ExecStart=/home/etudiant/.bun/bin/bun /var/www/pongping/pong-ping/server.js
+ExecStart=/home/etudiant/.bun/bin/bun /var/www/pongping/Pong-Ping/server.js
 Restart=always
 RestartSec=10
 

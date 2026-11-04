@@ -18,7 +18,7 @@ git init
 git add .
 git commit -m "Initial commit"
 git branch -M main
-git remote add origin https://github.com/<VOTRE_COMPTE>/pong-ping.git
+git remote add origin https://github.com/Perruchot-Thomas/Pong-Ping.git
 git push -u origin main
 ```
 
@@ -29,8 +29,8 @@ ssh -p 23<xxx> etudiant@185.157.244.202
 sudo mkdir -p /var/www/pongping
 sudo chown -R etudiant:etudiant /var/www/pongping
 cd /var/www/pongping
-git clone https://github.com/<VOTRE_COMPTE>/pong-ping.git
-cd pong-ping
+git clone https://github.com/Perruchot-Thomas/Pong-Ping.git
+cd Pong-Ping
 bun install
 ```
 
@@ -83,7 +83,7 @@ sudo systemctl restart apache2
 ## 6. Mise à jour
 
 ```bash
-cd /var/www/pongping/pong-ping
+cd /var/www/pongping/Pong-Ping
 git pull origin main
 bun install
 sudo systemctl restart pongping
