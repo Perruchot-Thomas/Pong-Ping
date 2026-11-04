@@ -291,6 +291,7 @@ const newCode = () => {
   do { c = Array.from({ length: 4 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join(''); } while (rooms.has(c));
   return c;
 };
+const cleanSkin = (v) => String(v || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 16);
 const send = (ws, o) => ws.readyState === 1 && ws.send(JSON.stringify(o));
 
 function leave(ws) {
@@ -309,6 +310,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => clearInterval(pinger));
   ws.on('message', (raw) => {
     let m; try { m = JSON.parse(raw); } catch { return; }
+    if (m.skin !== undefined) ws.skin = cleanSkin(m.skin); // design de balle choisi par le joueur
     if (m.t === 'create') {
       leave(ws);
       const code = newCode();
@@ -329,7 +331,7 @@ wss.on('connection', (ws) => {
       if (!room || room.game) return send(ws, { t: 'err', msg: room ? 'Partie déjà complète.' : 'Code introuvable.' });
       room.players.push(ws); ws.room = room; ws.idx = 1;
       room.game = new Game((st) => room.players.forEach((p) => send(p, st)));
-      room.players.forEach((p, i) => send(p, { t: 'start', you: i }));
+      room.players.forEach((p, i) => send(p, { t: 'start', you: i, opp: room.players[1 - i].skin || '' }));
       room.game.begin();
     } else if (m.t === 'leave') {
       leave(ws);
