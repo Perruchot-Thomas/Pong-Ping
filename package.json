@@ -1,0 +1,13 @@
+{
+  "name": "ping-pong-en-ligne",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "three": "^0.187.0",
+    "ws": "^8.22.1"
+  }
+}
