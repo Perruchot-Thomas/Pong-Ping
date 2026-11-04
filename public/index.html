@@ -895,7 +895,8 @@ const join = () => {
   ac(); startAmbience(); toast(''); connect(() => send({ t: 'join', code: c }));
 };
 $('joinBtn').onclick = join;
-$('join').onkeydown = (e) => e.key === 'Enter' && join();
+// (ne rien renvoyer : un "return false" dans onkeydown annulerait chaque touche tapée)
+$('join').addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
 const qc = new URLSearchParams(location.search).get('c');
 if (qc) $('join').value = qc.slice(0, 4);
 
